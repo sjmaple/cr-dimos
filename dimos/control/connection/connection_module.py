@@ -31,7 +31,7 @@ from dataclasses import dataclass
 import functools
 import threading
 import time
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_args, get_origin, get_type_hints
 import uuid
 
 from reactivex import operators as ops
@@ -54,6 +54,7 @@ from dimos.control.contract.keys import SEPARATOR
 from dimos.control.contract.ports import (
     JointPort,
     MotorPort,
+    PortSpec,
     TwistPort,
     control_description,
     port_specs,
@@ -132,6 +133,26 @@ class ConnectionConfig(ModuleConfig):
     model: RobotModel | None = None
     state_rate_hz: float = 100.0
     deadman_timeout_s: float = 0.1
+
+
+@dataclass(frozen=True, slots=True)
+class DriverPorts:
+    """One robot driver as a controller sees it: the robot, and which port carries what.
+
+    Plain data, worked out from the driver's class and settings without
+    starting it (see ``ConnectionModule.driver_ports``).
+
+    Attributes:
+        description: What the robot reports and accepts.
+        commands: The driver's command input ports, port name to what the
+            port drives, e.g. ``{"cmd_vel": TwistPort(...)}``.
+        readings: The driver's reading output ports, message type to port
+            name, e.g. ``{PoseStamped: "odom"}``.
+    """
+
+    description: ControlDescription
+    commands: Mapping[str, PortSpec]
+    readings: Mapping[type, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +282,31 @@ class ConnectionModule(Module, ABC):
                 {name: port.type for name, port in self.outputs.items()},
             )
         return self._description
+
+    @classmethod
+    def driver_ports(cls, kwargs: Mapping[str, Any]) -> DriverPorts:
+        """Describe the robot a driver of this class would drive, without starting one.
+
+        Args:
+            kwargs: The settings the driver is deployed with: its blueprint
+                arguments with any command-line or config-file overrides.
+
+        Raises:
+            pydantic.ValidationError: If the settings do not fit the config.
+            ValueError, DescriptionError: If the config and the ports do not
+                add up; see ``control_description``.
+        """
+        hints = get_type_hints(cls)
+        config = hints["config"](**kwargs)
+        inputs = {name: get_args(hint)[0] for name, hint in hints.items() if get_origin(hint) is In}
+        outputs = {
+            name: get_args(hint)[0] for name, hint in hints.items() if get_origin(hint) is Out
+        }
+        return DriverPorts(
+            description=control_description(config, inputs, outputs),
+            commands=port_specs(config),
+            readings=reading_ports(outputs),
+        )
 
     @abstractmethod
     def connect(self) -> None:
