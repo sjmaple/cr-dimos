@@ -27,6 +27,7 @@ Features:
 
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+import functools
 import inspect
 import threading
 import time
@@ -41,6 +42,8 @@ from dimos.control.components import (
     TaskName,
     split_joint_name,
 )
+from dimos.control.connection.connection_module import ConnectionModule, DriverPorts
+from dimos.control.connection_source import ConnectionSource
 from dimos.control.hardware_interface import (
     ConnectedHardware,
     ConnectedTwistBase,
@@ -73,7 +76,9 @@ from dimos.simulation.engines.spec import MujocoSimSpec
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+
+    from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
 
 logger = setup_logger()
 
@@ -108,6 +113,9 @@ class ControlCoordinatorConfig(ModuleConfig):
     # simulated adapters stay, so one saved robot configuration serves both.
     addresses: dict[str, str] = field(default_factory=dict)
     tasks: list[TaskConfig] = field(default_factory=lambda: [])
+    # The robots driven through connection modules, one per driver. Filled in
+    # when the blueprint is built; see ControlCoordinator.config_from_blueprint.
+    drivers: list[DriverPorts] = field(default_factory=lambda: [])
 
 
 class ControlCoordinator(Module):
@@ -123,6 +131,24 @@ class ControlCoordinator(Module):
     3. Arbitrates conflicting commands per joint (highest priority wins)
     4. Routes commands to the owning hardware adapter
     5. Publishes the aggregated canonical joint state
+
+    Robots can instead be driven through their own driver modules
+    (``ConnectionModule``), which the blueprint holds next to the
+    coordinator. Each robot needs a port on a coordinator subclass for every
+    port of its driver, named after the robot and the driver's port, and
+    joined to it by the blueprint's remappings::
+
+        class Go2Coordinator(ControlCoordinator):
+            go2_cmd_vel: Out[Twist]  # sends Go2Connection.cmd_vel
+            go2_odom: In[PoseStamped]  # reads Go2Connection.odom
+
+        autoconnect(Go2Coordinator.blueprint(), Go2Connection.blueprint()).remappings([
+            (Go2Connection, "cmd_vel", "go2_cmd_vel"),
+            (Go2Coordinator, "go2_odom", "odom"),
+        ])
+
+    Each tick every robot is sent a complete command. A coordinator drives
+    either hardware adapters or connection modules, never both.
 
     Key design decisions:
     - Joint-centric commands (not hardware-centric)
@@ -199,6 +225,13 @@ class ControlCoordinator(Module):
         # Card-declared command names per task, keyed by task name.
         # Guarded by _task_lock; added/pruned with their task.
         self._task_commands: dict[TaskName, frozenset[str]] = {}
+
+        # Robots driven through connection modules, by name, and each one's
+        # command ports by the driver's port name. Filled on start; guarded by
+        # _hardware_lock.
+        self._connections: dict[str, ConnectionSource] = {}
+        self._command_ports: dict[str, dict[str, Out[Any]]] = {}
+        self._reading_unsubs: list[Callable[[], None]] = []
 
         # Tick loop (created on start)
         self._tick_loop: TickLoop | None = None
@@ -364,6 +397,88 @@ class ControlCoordinator(Module):
     def _publish_robot_joint_state(self, hardware_id: HardwareId, msg: JointState) -> None:
         self._robot_joint_port(hardware_id).publish(msg)
 
+    @classmethod
+    def config_from_blueprint(
+        cls,
+        name: str,
+        blueprint: "Blueprint",
+        settings: "Mapping[str, Mapping[str, Any]]",
+    ) -> dict[str, Any]:
+        """Plan to drive every robot driver in the blueprint, and check each is wired up.
+
+        Called once when the blueprint is built, before any module starts.
+        Every ``ConnectionModule`` in the blueprint becomes one entry in
+        ``drivers``. See the class docstring for the ports and remappings each
+        robot needs.
+
+        Args:
+            name: This coordinator's instance name in the blueprint.
+            blueprint: The blueprint being built.
+            settings: Every module's settings by instance name.
+
+        Raises:
+            ValueError: If two drivers drive robots of one name, a robot
+                cannot be driven (see ``ConnectionSource``), a port it needs
+                is missing or not joined to its driver's port, another module
+                also sends one of its commands, or this coordinator also has
+                hardware adapters.
+        """
+        drivers = [
+            (atom, atom.module)
+            for atom in blueprint.active_blueprints
+            if issubclass(atom.module, ConnectionModule)
+        ]
+        if not drivers:
+            return {}
+        if settings[name].get("hardware"):
+            raise ValueError(
+                f"{name} has hardware adapters and the blueprint has connection modules "
+                f"{[atom.name for atom, _ in drivers]}; a coordinator drives one or the "
+                "other, not both"
+            )
+        coordinator = next(atom for atom in blueprint.active_blueprints if atom.name == name)
+        found: dict[str, DriverPorts] = {}
+        for atom, module in drivers:
+            driver = module.driver_ports(settings[atom.name])
+            source = driver.description.source
+            if source in found:
+                raise ValueError(
+                    f"two connection modules drive a robot called {source!r}; give each its "
+                    "own `source`"
+                )
+            ConnectionSource(driver)  # Refuses a robot the coordinator cannot drive.
+            _check_wiring(blueprint, coordinator, atom, driver)
+            found[source] = driver
+        return {"drivers": list(found.values())}
+
+    def _connect_drivers(self) -> None:
+        """Drive each robot in ``config.drivers`` through this coordinator's ports for it."""
+        with self._hardware_lock:
+            for driver in self.config.drivers:
+                connection = ConnectionSource(driver)
+                source = connection.hardware_id
+                self._connections[source] = connection
+                self._command_ports[source] = {
+                    port: getattr(self, f"{source}_{port}") for port in connection.command_ports
+                }
+                for joint in connection.joint_names:
+                    self._joint_to_hardware[joint] = source
+            connections = list(self._connections.values())
+        for connection in connections:
+            for port in connection.reading_ports:
+                reading: In[Any] = getattr(self, f"{connection.hardware_id}_{port}")
+                handler = functools.partial(connection.on_message, port)
+                self._reading_unsubs.append(reading.subscribe(handler))
+        if connections:
+            logger.info(f"Driving robots through connection modules: {sorted(self._connections)}")
+
+    def _publish_command(self, source: str, values: dict[str, float]) -> None:
+        """Send one robot its command for this tick. Called by the tick loop,
+        which holds ``_hardware_lock``."""
+        ports = self._command_ports[source]
+        for port, msg in self._connections[source].command_messages(values, time.time()):
+            ports[port].publish(msg)
+
     @rpc
     def add_hardware(
         self,
@@ -386,6 +501,12 @@ class ControlCoordinator(Module):
                 f"Hardware type / adapter mismatch for '{component.hardware_id}': "
                 f"hardware_type={component.hardware_type.value} but got "
                 f"{type(adapter).__name__}"
+            )
+
+        if self.config.drivers:
+            raise ValueError(
+                f"cannot add hardware {component.hardware_id!r}: this coordinator drives "
+                "connection modules, and a coordinator drives one or the other, not both"
             )
 
         if self.config.publish_robot_joint_states:
@@ -460,9 +581,9 @@ class ControlCoordinator(Module):
 
     @rpc
     def list_hardware(self) -> list[str]:
-        """List registered hardware IDs."""
+        """List registered hardware IDs, then robots driven through connection modules."""
         with self._hardware_lock:
-            return list(self._hardware.keys())
+            return [*self._hardware, *self._connections]
 
     @rpc
     def list_joints(self) -> list[str]:
@@ -479,6 +600,8 @@ class ControlCoordinator(Module):
                 state = hw.read_state()  # {joint_name: JointState}
                 for joint_name, joint_state in state.items():
                     positions[joint_name] = joint_state.position
+            for connection in self._connections.values():
+                positions.update(connection.read_joints().joint_positions)
             return positions
 
     @rpc
@@ -933,6 +1056,7 @@ class ControlCoordinator(Module):
         # Setup hardware and tasks from config (if any)
         if self.config.hardware or self.config.tasks:
             self._setup_from_config()
+        self._connect_drivers()
 
         # Create and start tick loop
         publish_cb = (
@@ -957,6 +1081,8 @@ class ControlCoordinator(Module):
             frame_pose_hz=self.config.frame_pose_hz,
             frame_id=self.config.joint_state_frame_id,
             log_ticks=self.config.log_ticks,
+            connections=self._connections,
+            connection_command_callback=self._publish_command,
         )
         self._tick_loop.start()
 
@@ -979,6 +1105,10 @@ class ControlCoordinator(Module):
             for unsub in self._stream_unsubs.values():
                 unsub()
             self._stream_unsubs.clear()
+
+        for unsub in self._reading_unsubs:
+            unsub()
+        self._reading_unsubs.clear()
 
         if self._tick_loop:
             self._tick_loop.stop()
@@ -1010,3 +1140,82 @@ class ControlCoordinator(Module):
     def get_tick_count(self) -> int:
         """Get the number of ticks since start."""
         return self._tick_loop.tick_count if self._tick_loop else 0
+
+
+def _check_wiring(
+    blueprint: "Blueprint",
+    coordinator: "BlueprintAtom",
+    driver_atom: "BlueprintAtom",
+    driver: DriverPorts,
+) -> None:
+    """Raise unless the coordinator's ports for one robot are joined to its driver's ports.
+
+    Each command input of the driver needs ``<robot>_<port>: Out[message]`` on
+    the coordinator, and each reading output ``<robot>_<port>: In[message]``.
+    Each pair must be on one stream, and no other port may publish on a
+    stream the robot takes commands from.
+
+    Args:
+        blueprint: The blueprint being built.
+        coordinator: The coordinator in it.
+        driver_atom: The robot's driver in it.
+        driver: What the driver's ports carry.
+    """
+    source = driver.description.source
+    own_ports = {stream.name: stream for stream in coordinator.streams}
+    wanted = [(port, spec.message, "out") for port, spec in driver.commands.items()]
+    wanted += [(port, message, "in") for message, port in driver.readings.items()]
+    for port, message, direction in wanted:
+        own = f"{source}_{port}"
+        found = own_ports.get(own)
+        if found is None or found.direction != direction or found.type is not message:
+            kind = "Out" if direction == "out" else "In"
+            raise ValueError(
+                f"robot {source!r}: {coordinator.module.__name__} needs a port for "
+                f"{driver_atom.module.__name__}.{port}; declare "
+                f"`{own}: {kind}[{message.__name__}]` on it"
+            )
+        own_stream = _stream_name(blueprint, coordinator, own)
+        driver_stream = _stream_name(blueprint, driver_atom, port)
+        if own_stream != driver_stream:
+            if direction == "out":
+                fix = f"({_ref(blueprint, driver_atom)}, {port!r}, {own_stream!r})"
+            else:
+                fix = f"({_ref(blueprint, coordinator)}, {own!r}, {driver_stream!r})"
+            raise ValueError(
+                f"robot {source!r}: {coordinator.module.__name__}.{own} is on stream "
+                f"{own_stream!r} but {driver_atom.module.__name__}.{port} is on "
+                f"{driver_stream!r}; add `.remappings([{fix}])` to the blueprint"
+            )
+        if direction == "in":
+            continue
+        for atom in blueprint.active_blueprints:
+            for stream in atom.streams:
+                if (
+                    stream.direction != "in"
+                    and stream.type is message
+                    and (atom.name, stream.name) != (coordinator.name, own)
+                    and _stream_name(blueprint, atom, stream.name) == own_stream
+                ):
+                    raise ValueError(
+                        f"robot {source!r}: {atom.module.__name__}.{stream.name} also "
+                        f"publishes on stream {own_stream!r}, which "
+                        f"{driver_atom.module.__name__}.{port} takes commands from; only the "
+                        f"coordinator may. Give the robot a stream of its own: "
+                        f"`.remappings([({_ref(blueprint, driver_atom)}, {port!r}, {own!r}), "
+                        f"({_ref(blueprint, coordinator)}, {own!r}, {own!r})])`"
+                    )
+
+
+def _stream_name(blueprint: "Blueprint", atom: "BlueprintAtom", port: str) -> str:
+    """The stream a module's port is on once the blueprint's remappings apply,
+    worked out the way the blueprint wires streams."""
+    remapped = blueprint.remapping_map.get((atom.name, port), port)
+    return remapped if isinstance(remapped, str) else port
+
+
+def _ref(blueprint: "Blueprint", atom: "BlueprintAtom") -> str:
+    """How to name a module in ``.remappings``: its class, or its instance
+    name if the class is in the blueprint more than once."""
+    same = [other for other in blueprint.active_blueprints if other.module is atom.module]
+    return atom.module.__name__ if len(same) == 1 else repr(atom.name)
