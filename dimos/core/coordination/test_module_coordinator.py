@@ -44,7 +44,7 @@ from dimos.core.coordination.module_coordinator import (
 from dimos.core.coordination.worker_manager_python import WorkerManagerPython
 from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
-from dimos.core.module import Module
+from dimos.core.module import Module, ModuleConfig
 from dimos.core.rpc_client import RPCClient
 from dimos.core.stream import IO, In, Out, Stream
 from dimos.core.transport import CloudflareTransport, PubSubTransport
@@ -357,6 +357,53 @@ def test_deploy_does_not_deepcopy_pinned_kwargs(mocker) -> None:
     _deploy_all_modules(blueprint, coordinator, coordinator._global_config, {})
 
     assert deploy.call_args.args[0][0][2]["lock"] is lock
+
+
+class CounterConfig(ModuleConfig):
+    count: int = 0
+
+
+class Counter(Module):
+    config: CounterConfig
+
+
+class TotalConfig(ModuleConfig):
+    total: int = 0
+
+
+class Totaller(Module):
+    """Sets its total to the sum of every other module's count."""
+
+    config: TotalConfig
+
+    @classmethod
+    def config_from_blueprint(
+        cls, name: str, blueprint: Blueprint, settings: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
+        return {"total": sum(s.get("count", 0) for n, s in settings.items() if n != name)}
+
+
+def test_a_module_can_work_out_settings_from_the_blueprint(mocker) -> None:
+    blueprint = autoconnect(
+        Counter.blueprint(count=2).namespace("a"),
+        Counter.blueprint(count=3).namespace("b"),
+        Totaller.blueprint(),
+    )
+    coordinator = ModuleCoordinator(g=GlobalConfig(viewer="none"))
+    deploy = mocker.patch.object(coordinator, "deploy_parallel", return_value=[])
+
+    # A command-line override counts, not the blueprint's value.
+    _deploy_all_modules(
+        blueprint, coordinator, coordinator._global_config, {"b/counter": {"count": 5}}
+    )
+
+    deployed = {
+        kwargs.get("instance_name", cls.name): kwargs for cls, _, kwargs in deploy.call_args.args[0]
+    }
+    assert deployed[Totaller.name]["total"] == 7
+    assert "total" not in deployed["a/counter"]
+    # Recorded, so a restarted module is deployed with it again.
+    assert coordinator._deployed_atoms[Totaller.name].kwargs["total"] == 7
 
 
 def test_name_conflicts_are_reported() -> None:

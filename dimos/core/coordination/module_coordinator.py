@@ -981,8 +981,23 @@ def _deploy_all_modules(
     gc: GlobalConfig,
     module_kwargs: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    module_specs: list[ModuleSpec] = []
-    deployed_atoms: dict[str, BlueprintAtom] = {}
+    """Deploy every module in the blueprint with its final settings.
+
+    A module's settings are its blueprint arguments with ``module_kwargs``
+    (command line, environment, config file) on top.
+
+    A module class can also work out some of its settings from the rest of
+    the blueprint, e.g. a controller reading the settings of the robots it
+    drives, by defining a classmethod::
+
+        config_from_blueprint(name, blueprint, settings) -> dict[str, Any]
+
+    It is called before any module is deployed, with its own instance name,
+    the blueprint, and every module's settings by instance name, which it
+    must not change. What it returns is added to its own settings, and kept
+    when the module is restarted.
+    """
+    settings: dict[str, dict[str, Any]] = {}
     for bp in blueprint.active_blueprints:
         # Shallow copies: pinned kwargs may hold objects that cannot be
         # deep-copied, and parsed values are already independent snapshots.
@@ -992,8 +1007,22 @@ def _deploy_all_modules(
         kwargs.pop("instance_name", None)
         if bp.instance_name is not None:
             kwargs["instance_name"] = bp.instance_name
-        module_specs.append((bp.module, gc, kwargs))
-        deployed_atoms[bp.name] = dataclasses.replace(bp, kwargs=dict(kwargs))
+        settings[bp.name] = kwargs
+
+    # Every hook runs before any result is added, so all see the same settings.
+    added = {
+        bp.name: hook(bp.name, blueprint, settings)
+        for bp in blueprint.active_blueprints
+        if (hook := getattr(bp.module, "config_from_blueprint", None)) is not None
+    }
+    for name, extra in added.items():
+        settings[name].update(extra)
+
+    module_specs: list[ModuleSpec] = []
+    deployed_atoms: dict[str, BlueprintAtom] = {}
+    for bp in blueprint.active_blueprints:
+        module_specs.append((bp.module, gc, settings[bp.name]))
+        deployed_atoms[bp.name] = dataclasses.replace(bp, kwargs=dict(settings[bp.name]))
 
     module_coordinator.deploy_parallel(module_specs)
 
