@@ -52,26 +52,26 @@ go2_dds = GO2DDS.blueprint(**JETSON).global_config(transport="zenoh", robot_mode
 # The head L1 stays off and Point-LIO owns odom, so GO2DDS publishes no lidar, odometry or
 # odom tf edge. Its raw L1 cloud and body IMU move aside so only the MID-360 reaches
 # Point-LIO's inputs.
-go2_dds_mid360 = GO2DDS.blueprint(
+_MID360_KWARGS: dict[str, str | bool | ZenohConfig] = {
     **JETSON,
-    lidar_on=False,
-    tf_root="mid360_link",
-).remappings(
-    [
-        (GO2DDS, "odometry", "go2_odometry_unused"),
-        (GO2DDS, "lidar", "go2_lidar_unused"),
-        (GO2DDS, "lidar_raw", "l1_lidar_raw"),
-        (GO2DDS, "lidar_imu", "l1_lidar_imu"),
-        (GO2DDS, "imu", "go2_imu"),
-    ]
-)
+    "lidar_on": False,
+    "tf_root": "mid360_link",
+}
+_MID360_REMAPPINGS = [
+    (GO2DDS, "odometry", "go2_odometry_unused"),
+    (GO2DDS, "lidar", "go2_lidar_unused"),
+    (GO2DDS, "lidar_raw", "l1_lidar_raw"),
+    (GO2DDS, "lidar_imu", "l1_lidar_imu"),
+    (GO2DDS, "imu", "go2_imu"),
+]
+go2_dds_mid360 = GO2DDS.blueprint(**_MID360_KWARGS).remappings(_MID360_REMAPPINGS)
 
 # GO2DDS's native process is the zenoh router (the Go2 forwards 7447 to the Jetson, so the
 # viewer dials go22); every other process dials it on loopback. Headless:
 # go2-dds-mid360-viewer on another machine is the screen.
 # The Mid-360 IP comes from MID360__LIDAR_IP; host_ip is auto-detected.
 go2_dds_nav = autoconnect(
-    go2_dds_mid360,
+    GO2DDS.blueprint(**_MID360_KWARGS, obstacle_avoidance=False).remappings(_MID360_REMAPPINGS),
     mid360_for_pointlio(),
     _go2_nav,
     relocalization(republish_loaded_map=0.0),
@@ -87,7 +87,7 @@ go2_dds_nav = autoconnect(
 # GO2DDS atom wins and spins the L1 up; go2-dds-nav's remappings still apply.
 go2_dds_nav_l1 = autoconnect(
     go2_dds_nav,
-    GO2DDS.blueprint(**JETSON, lidar_raw_on=True, tf_root="mid360_link"),
+    GO2DDS.blueprint(**JETSON, lidar_raw_on=True, tf_root="mid360_link", obstacle_avoidance=False),
     GO2L1Lidar.blueprint(),
 ).global_config(n_workers=12)
 

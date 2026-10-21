@@ -66,6 +66,8 @@ class GO2DDSConfig(NativeModuleConfig, Go2BaseConfig):
     lidar_on: bool = True
     # Also the undeskewed sensor-frame cloud, the L1's own IMU and its height map.
     lidar_raw_on: bool = False
+    # The robot's built-in obstacle avoidance, applied at start.
+    obstacle_avoidance: bool = True
     # Body joint and motor states, IMU and battery off rt/lowstate, decimated to lowstate_hz.
     lowstate_on: bool = True
     lowstate_hz: float = 50.0
