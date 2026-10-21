@@ -43,6 +43,7 @@ FamilyName = Literal[
     "largest_visible_area",
     "object_distance",
     "closest_object",
+    "cross_view_same_object",
 ]
 
 

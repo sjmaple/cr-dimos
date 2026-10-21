@@ -86,6 +86,14 @@ CLOSEST_OBJECT_FAMILY = FamilySpec(
     requires_pointcloud=True,
     object_order_matters=False,
 )
+CROSS_VIEW_SAME_OBJECT_FAMILY = FamilySpec(
+    name="cross_view_same_object",
+    description=(
+        "Ask whether the named category in image A and image B is the same physical "
+        "instance. Generated from Dan localize multi-view traces (not image-only authoring). "
+        "Both views must pass center/size framing gates on the original full frames."
+    ),
+)
 AVAILABLE_FAMILIES = (
     PRESENCE_FAMILY,
     HORIZONTAL_DIRECTION_FAMILY,
@@ -94,6 +102,7 @@ AVAILABLE_FAMILIES = (
     LARGEST_VISIBLE_AREA_FAMILY,
     OBJECT_DISTANCE_FAMILY,
     CLOSEST_OBJECT_FAMILY,
+    CROSS_VIEW_SAME_OBJECT_FAMILY,
 )
 
 _FAMILIES_BY_NAME = {family.name: family for family in AVAILABLE_FAMILIES}
@@ -141,6 +150,11 @@ def answer_question(
                 "closest object requires image-aligned point-cloud evidence"
             )
         return _answer_closest_object(proposal, pointcloud_frame, range_estimator)
+    if proposal.family == "cross_view_same_object":
+        raise InsufficientEvidenceError(
+            "cross_view_same_object is produced by generate_cross_view_dataset, "
+            "not the per-frame image author path"
+        )
     raise ValueError(f"unsupported VQA family: {proposal.family}")
 
 
