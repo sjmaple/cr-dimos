@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Demonstrate live Rerun bridge rendering and CDR MCAP playback without a robot."""
+"""Demonstrate live Rerun bridge rendering and native CDR MCAP viewing without a robot."""
 
 from __future__ import annotations
 
@@ -33,8 +33,6 @@ import rerun as rr
 import rerun.blueprint as rrb
 
 from dimos.core.transport import ZenohTransport
-from dimos.memory.cli.render import render_store
-from dimos.memory.store.cdr_mcap import CdrMcapStore
 from dimos.messages.builtin_interfaces.msg import Time
 from dimos.messages.dimos_msgs.msg import EntityMarker, EntityMarkers
 from dimos.messages.geometry_msgs.msg import (
@@ -315,9 +313,8 @@ class LoopbackRPC(ZenohRPC):
 def run(output: Path) -> None:
     # Reserve destinations before starting sockets. Existing recordings are never overwritten.
     mcap = output.with_suffix(".mcap")
-    replay = output.with_name(output.stem + "-replay.rrd")
     with ExitStack() as cleanup:
-        for destination in (output, mcap, replay):
+        for destination in (output, mcap):
             cleanup.enter_context(destination.open("xb"))
         config: dict[str, Any] = dict(
             mode="peer", listen=["tcp/127.0.0.1:0"], scouting=False, multicast=False, gossip=False
@@ -382,15 +379,8 @@ def run(output: Path) -> None:
         recording = rr.get_global_data_recording()
         if recording is not None:
             recording.flush()
-    with CdrMcapStore(path=str(mcap)) as store:
-        print(store.summary())
-        render_store(store, out=str(replay), no_gui=True, root="world")
-    recording = rr.get_global_data_recording()
-    if recording is not None:
-        recording.flush()
-    rr.disconnect()
     print(f"Live bridge: rerun {output}")
-    print(f"MCAP playback: rerun {replay}")
+    print(f"Native MCAP view: rerun {mcap}")
     print(f"Reusable recording: {mcap}")
     print("Source timestamp: 1700000000.123456789; pose [1.5, -2.5, 0.25].")
 
@@ -398,7 +388,9 @@ def run(output: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "output", type=Path, help="new .rrd filename; also creates .mcap and -replay.rrd"
+        "output",
+        type=Path,
+        help="new live .rrd filename; also creates a CDR .mcap for native Rerun viewing",
     )
     args = parser.parse_args()
     run(args.output)

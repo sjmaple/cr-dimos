@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run the reviewer example and inspect its live-bridge and MCAP-playback RRDs."""
+"""Run the reviewer example and inspect its live bridge and native MCAP importer."""
 
 from pathlib import Path
 import subprocess
@@ -21,7 +21,7 @@ import sys
 import pytest
 
 
-def test_live_bridge_and_mcap_playback_cover_viewer_scene(
+def test_live_bridge_and_native_mcap_import_cover_scene(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The pinned Rerun CLI disables analytics when CI is present. This changes
@@ -69,26 +69,33 @@ def test_live_bridge_and_mcap_playback_cover_viewer_scene(
         "Generated RGB pixels",
     ):
         assert marker in result.stdout, marker
-    replay = output.with_name(output.stem + "-replay.rrd")
-    playback = subprocess.run(
-        [str(rerun), "rrd", "print", "-vvv", str(replay)],
+    recording = output.with_suffix(".mcap")
+    assert recording.read_bytes().startswith(b"\x89MCAP")
+    native = output.with_name(output.stem + "-native.rrd")
+    subprocess.run(
+        [str(rerun), "mcap", "convert", str(recording), "-o", str(native)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    imported = subprocess.run(
+        [str(rerun), "rrd", "print", "-vvv", str(native)],
         check=True,
         capture_output=True,
         text=True,
         timeout=30,
     )
     for marker in (
-        "world/pose",
-        "world/path",
-        "world/entities",
-        "tf#/camera",
+        "/pose",
+        "/tf",
         "Image:buffer",
-        "DepthImage:meter",
+        "Points3D:positions",
         "Pinhole:image_from_camera",
+        "InstancePoses3D",
+        "2023-11-14T22:13:20.123456789",
     ):
-        assert marker in playback.stdout, marker
-    recording = output.with_suffix(".mcap")
-    assert recording.read_bytes().startswith(b"\x89MCAP")
+        assert marker in imported.stdout, marker
     repeated = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert repeated.returncode != 0
     assert "FileExistsError" in repeated.stderr

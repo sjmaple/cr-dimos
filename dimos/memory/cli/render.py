@@ -14,9 +14,9 @@
 
 """Render any memory store into rerun.
 
-Walks the store's streams and renders generated values through external adapters.
-Existing local helper values with ``to_rerun()`` remain supported. Unsupported
-payloads are reported and skipped. Each stream becomes an entity
+Generic: walks the store's streams and logs every observation whose payload
+implements ``to_rerun()`` (the :class:`RerunConvertible` convention). Streams
+whose payload has no ``to_rerun`` are skipped. Each stream becomes an entity
 path; observations share one ``time`` timeline (relative to the store's earliest
 observation, so streams stay aligned). CameraInfo streams are the exception:
 logged once as a Pinhole on their matching image entity (see
@@ -30,82 +30,43 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-import rerun as rr
-
-from dimos.core.introspection.utils import GROUP_COLORS
-from dimos.memory.utils.progress import progress
-from dimos.messages.sensor_msgs.msg import (
-    CameraInfo as CdrCameraInfo,
-    CompressedImage,
-    Image as CdrImage,
-)
-from dimos.messages.std_msgs.msg import Header as CdrHeader
-from dimos.messages.tf2_msgs.msg import TFMessage as CdrTFMessage
-from dimos.msgs.nav_msgs.Path import Path as NavPath
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.shape_msgs.TriangleMesh import TriangleMesh
-from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
-from dimos.visualization.rerun.cdr import camera_pinhole, generated_archetypes, message_frame_id
-from dimos.visualization.rerun.init import rerun_init
-
 if TYPE_CHECKING:
     from dimos.memory.store.base import Store
     from dimos.memory.stream import Stream
     from dimos.memory.type.observation import Observation
-
-
-def _render_entries(data: Any, entity: str) -> list[tuple[str, Any]] | None:
-    generated = generated_archetypes(data, entity)
-    if generated is not None:
-        return [(entry[0], entry[1]) for entry in generated]
-    if not hasattr(data, "to_rerun"):
-        return None
-    local = data.to_rerun()
-    if isinstance(local, list):
-        return [(f"{entity}/{sub}", archetype) for sub, archetype in local]
-    return [(entity, local)]
+    from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 
 
 def _pair_camera_infos(
     renderable: list[tuple[str, Stream[Any], Observation[Any]]],
-) -> tuple[dict[str, tuple[CameraInfo | CdrCameraInfo, str]], set[str]]:
+) -> tuple[dict[str, tuple[CameraInfo, str]], set[str]]:
     """Match each CameraInfo stream to the Image stream(s) it calibrates.
 
     Pairs by ``frame_id``, falling back to the only image stream when the store
     has one of each; the image's frame_id wins as the pinhole's parent frame.
     Returns (image stream -> (CameraInfo, parent frame), paired stream names).
     """
+    from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+    from dimos.msgs.sensor_msgs.Image import Image
 
-    infos = [
-        (n, f.data) for n, _, f in renderable if isinstance(f.data, (CameraInfo, CdrCameraInfo))
-    ]
-    images = [
-        (n, f.data)
-        for n, _, f in renderable
-        if isinstance(f.data, (Image, CdrImage, CompressedImage))
-    ]
+    infos = [(n, f.data) for n, _, f in renderable if isinstance(f.data, CameraInfo)]
+    images = [(n, f.data) for n, _, f in renderable if isinstance(f.data, Image)]
 
-    pinholes: dict[str, tuple[CameraInfo | CdrCameraInfo, str]] = {}
+    pinholes: dict[str, tuple[CameraInfo, str]] = {}
     paired: set[str] = set()
     for info_name, info in infos:
-        targets = [
-            (n, img)
-            for n, img in images
-            if message_frame_id(img) and message_frame_id(img) == message_frame_id(info)
-        ]
+        targets = [(n, img) for n, img in images if img.frame_id and img.frame_id == info.frame_id]
         if not targets and len(infos) == 1 and len(images) == 1:
             targets = [images[0]]
             print(
-                f"  {info_name}: frame_id {message_frame_id(info)!r} matches no image stream, "
+                f"  {info_name}: frame_id {info.frame_id!r} matches no image stream, "
                 f"pairing with {targets[0][0]!r} as the only image stream"
             )
         if not targets:
-            print(f"  {info_name}: no image stream matches frame_id {message_frame_id(info)!r}")
+            print(f"  {info_name}: no image stream matches frame_id {info.frame_id!r}")
             continue
         for target, img in targets:
-            pinholes[target] = (info, message_frame_id(img) or message_frame_id(info) or "")
+            pinholes[target] = (info, img.frame_id or info.frame_id)
         paired.add(info_name)
     return pinholes, paired
 
@@ -120,10 +81,11 @@ def _frame_first_seen(
     first tf message overall (which may be an unrelated or static edge).
     Scans each tf stream only until every frame is found.
     """
+    from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 
     seen: dict[str, float] = {}
     for _, stream, first in renderable:
-        if not isinstance(first.data, (TFMessage, CdrTFMessage)):
+        if not isinstance(first.data, TFMessage):
             continue
         missing = set(frames)
         for obs in stream:
@@ -162,6 +124,15 @@ def render_store(
     (``<root>/<name>``) — except a stream whose name matches ``root``'s last
     segment, which stays at ``<root>`` itself. Returns the ``.rrd`` path.
     """
+    import rerun as rr
+
+    from dimos.core.introspection.utils import GROUP_COLORS
+    from dimos.memory.utils.progress import progress
+    from dimos.msgs.nav_msgs.Path import Path as NavPath
+    from dimos.msgs.shape_msgs.TriangleMesh import TriangleMesh
+    from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
+    from dimos.visualization.rerun.init import rerun_init
+
     if out is None:
         src = getattr(store.config, "path", None) or "store"
         out = str(Path(src).with_suffix(".rrd"))
@@ -183,12 +154,13 @@ def render_store(
         except LookupError:
             continue
         data = first.data
+        if not hasattr(data, "to_rerun"):
+            print(f"  skip {name}: {type(data).__name__} has no to_rerun()")
+            continue
         try:
-            if _render_entries(data, entity(name)) is None:
-                print(f"  skip {name}: no renderer for {type(data).__name__}")
-                continue
+            data.to_rerun()
         except Exception as e:
-            print(f"  skip {name}: renderer failed ({e})")
+            print(f"  skip {name}: to_rerun() failed ({e})")
             continue
         renderable.append((name, stream, first))
 
@@ -204,18 +176,14 @@ def render_store(
     # Log each pinhole when its own parent frame first appears in tf: before
     # that the frame is undefined and the pinhole would sit at the origin.
     # Static only when the store has no tf at all.
-    has_tf = any(isinstance(f.data, (TFMessage, CdrTFMessage)) for _, _, f in renderable)
+    has_tf = any(isinstance(f.data, TFMessage) for _, _, f in renderable)
     frame_at = _frame_first_seen(renderable, {frame for _, frame in pinholes.values()})
 
     rerun_init("dimos mem rerun")
     rr.save(out)
 
     for image_name, (info, frame) in pinholes.items():
-        pinhole = (
-            camera_pinhole(info, optical_frame=frame)
-            if isinstance(info, CdrCameraInfo)
-            else info.to_rerun_pinhole(optical_frame=frame)
-        )
+        pinhole = info.to_rerun_pinhole(optical_frame=frame)
         at = frame_at.get(frame)
         if not has_tf:
             rr.log(entity(image_name), pinhole, static=True)
@@ -245,22 +213,6 @@ def render_store(
                     report(obs)
                     continue
                 rr.set_time("time", duration=obs.ts - t0)
-                header = getattr(obs.data, "header", None)
-                if isinstance(header, CdrHeader):
-                    rr.set_time(
-                        "source",
-                        timestamp=np.datetime64(
-                            header.stamp.sec * 1_000_000_000 + header.stamp.nanosec, "ns"
-                        ),
-                    )
-                else:
-                    rr.disable_timeline("source")
-                generated = generated_archetypes(obs.data, path)
-                if generated is not None:
-                    for entry_path, archetype in _render_entries(obs.data, path) or []:
-                        rr.log(entry_path, archetype)
-                    report(obs)
-                    continue
                 if isinstance(obs.data, TFMessage):  # absolute tf paths, like the bridge
                     for tf_path, arch in obs.data.to_rerun(tf_tree):
                         rr.log(tf_path, arch)

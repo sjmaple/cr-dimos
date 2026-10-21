@@ -159,18 +159,30 @@ From the repository root:
 DIMOS_ALLOW_MISSING_COCKPIT=1 uv sync --locked --extra visualization --extra web
 uv run --extra visualization --extra web python -I examples/message-viewer/demo_cdr_rerun.py cdr-viewer.rrd
 uv run --extra visualization rerun cdr-viewer.rrd
-uv run --extra visualization rerun cdr-viewer-replay.rrd
+uv run --extra visualization rerun cdr-viewer.mcap
 ```
 
-Use a new output filename for each run. The example also creates
-`cdr-viewer.mcap`. All three destinations must be new. The build flag permits
+Use a new output filename for each run. The example creates the live RRD and
+`cdr-viewer.mcap`. Both destinations must be new. The build flag permits
 installation without prebuilt browser assets; message generation still runs.
 
 The live recording uses `RerunBridgeModule.start()`, its typed subscriptions and
 rendering callbacks. A receipt signal waits for each message before shutdown.
 The MCAP contains the source scene encoded as CDR with complete ROS2 schemas.
-`CdrMcapStore` and `render_store` read that file to create the replay recording.
-The MCAP is example input for playback, not a capture by the native recorder.
+It is example input for playback, not a capture by the native recorder.
+
+Open the MCAP directly with Rerun's native importer. To save its imported data:
+
+```sh skip
+uv run --extra visualization rerun mcap convert cdr-viewer.mcap -o cdr-viewer-native.rrd
+```
+
+Rerun 0.32 converts supported standard ROS2 types into visualizations. Other
+messages, including this scene's Path and custom EntityMarkers, are available
+as reflected fields; they do not automatically acquire the live bridge's path
+or labeled-entity display. No DimOS Python renderer is used for this import.
+Existing `dimos mem rerun` behavior for legacy stores, including `--seconds`
+and `--root`, is unchanged. Use the native Rerun command for CDR MCAP files.
 
 | PR capability | Demo scene | What to check |
 | --- | --- | --- |
@@ -180,12 +192,12 @@ The MCAP is example input for playback, not a capture by the native recorder.
 | Sensor buffers | `image`, `depth`, `compressed`, `compressed_depth` | Four RGB pixels, big-endian uint16 depth, PNG image and JXL depth in the sensor tab |
 | Cloud rendering | `cloud`, `cloud_boxes`, `cloud_height` | RGB points, boxes and height-colored spheres |
 | Legacy rendering | `legacy_pose` | Existing pose rendering alongside generated messages |
-| MCAP playback | `cdr-viewer-replay.rrd` | The same generated scene loaded from its embedded schemas; cloud display uses the replay defaults |
+| Native MCAP import | `cdr-viewer.mcap` | Standard images, points, calibration and TF; reflected fields for types without a native visualization |
 
 The example anchors its `world` TF frame to the viewer root. Business producers
 must supply their own TF tree. It does not demonstrate robot graph migration or
 automatic CDR type discovery. The existing integration test runs this example,
-reads both RRDs with the Rerun CLI, and checks the listed data and components.
+checks the live RRD, then converts the MCAP with the official CLI and checks its imported components.
 
 For the live browser SDK and manifest path, run the
 [Web bridge demo](/docs/web/bridge.md#generated-cdr-messages-wip).

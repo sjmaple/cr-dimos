@@ -53,7 +53,6 @@ from dimos.visualization.rerun.cdr import (
     cloud_archetype,
     generated_archetypes,
     image_archetype,
-    register_colormap_annotation,
 )
 from dimos.visualization.vis_module import vis_module
 from dimos.web.relay_bridge.gen_cdr_fixtures import build_messages
@@ -292,17 +291,6 @@ def test_fixed_display_color_overrides_sensor_rgb_after_invalid_points_filter(mo
     assert positions.as_arrow_array().to_pylist() == [[1, 2, 3]]
     assert value.colors.as_arrow_array().to_pylist() == [0x4CDC29FF]
     assert encode(cloud) == before
-
-
-def test_height_palette_uses_all_class_ids_at_the_recording_root(mocker):
-    log = mocker.patch.object(rr, "log")
-    register_colormap_annotation("turbo")
-    log.assert_called_once()
-    path, annotation = log.call_args.args
-    assert path == "/" and log.call_args.kwargs == {"static": True}
-    [classes] = annotation.context.as_arrow_array().to_pylist()
-    assert [item["class_id"] for item in classes] == list(range(256))
-    assert classes[0]["class_description"]["info"]["color"] == 0x30123BFF
 
 
 def test_generated_odometry_exposes_pose_axes_and_full_covariance_fields():

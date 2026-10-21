@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from functools import lru_cache
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -135,32 +134,6 @@ def cloud_archetype(
         points,
         colors=colors,
         radii=rr.components.Radius.ui_points(2.0) if mode == "points" else voxel_size / 2,
-    )
-
-
-@lru_cache(maxsize=16)
-def _colormap_lut(name: str) -> np.ndarray[Any, np.dtype[np.uint8]]:
-    from matplotlib import colormaps
-
-    return (colormaps[name](np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
-
-
-def register_colormap_annotation(name: str = "turbo") -> None:
-    """Register the height palette outside the generated point-cloud value type."""
-    import rerun as rr
-
-    lut = _colormap_lut(name)
-    rr.log(
-        "/",
-        rr.AnnotationContext(
-            [
-                rr.datatypes.ClassDescription(
-                    info=rr.datatypes.AnnotationInfo(id=i, color=lut[i].tolist())
-                )
-                for i in range(256)
-            ]
-        ),
-        static=True,
     )
 
 
