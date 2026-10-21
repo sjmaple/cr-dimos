@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run the exact offline example and inspect its real RRD with the SDK's CLI."""
+"""Run the reviewer example and inspect its live-bridge and MCAP-playback RRDs."""
 
 from pathlib import Path
 import subprocess
@@ -21,7 +21,7 @@ import sys
 import pytest
 
 
-def test_actual_loopback_example_preserves_pose_axes_values_and_nanoseconds(
+def test_live_bridge_and_mcap_playback_cover_viewer_scene(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The pinned Rerun CLI disables analytics when CI is present. This changes
@@ -42,18 +42,53 @@ def test_actual_loopback_example_preserves_pose_axes_values_and_nanoseconds(
         text=True,
         timeout=30,
     )
-    assert "TransformAxes3D:axis_length" in result.stdout
-    assert "[[1.5, -2.5, 0.25]]" in result.stdout
-    assert "[[0.0, 0.0, 0.6, 0.8]]" in result.stdout
-    assert "tf#/map" in result.stdout
-    assert "2023-11-14T22:13:20.123456789" in result.stdout
-    assert '"nanosec": 123456789' in result.stdout
-    assert "Exact message values" in result.stdout
-    assert "Points3D:positions" in result.stdout
-    assert "Points3D:colors" in result.stdout
-    assert "Image:buffer" in result.stdout
-    assert "Pinhole:image_from_camera" in result.stdout
-    assert "Generated RGB pixels" in result.stdout
+    for marker in (
+        "TransformAxes3D:axis_length",
+        "[[1.5, -2.5, 0.25]]",
+        "[[0.0, 0.0, 0.6, 0.8]]",
+        "tf#/map",
+        "tf#/camera",
+        "2023-11-14T22:13:20.123456789",
+        '"nanosec": 123456789',
+        "Exact message values",
+        "Points3D:positions",
+        "Points3D:colors",
+        "Boxes3D:centers",
+        "Image:buffer",
+        "Pinhole:image_from_camera",
+        "DepthImage:meter",
+        "EncodedImage:blob",
+        "world/path",
+        "world/odometry",
+        "world/entities",
+        "demo person",
+        "world/legacy_pose",
+        "world/late_image",
+        "world/cloud_boxes",
+        "world/cloud_height",
+        "Generated RGB pixels",
+    ):
+        assert marker in result.stdout, marker
+    replay = output.with_name(output.stem + "-replay.rrd")
+    playback = subprocess.run(
+        [str(rerun), "rrd", "print", "-vvv", str(replay)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    for marker in (
+        "world/pose",
+        "world/path",
+        "world/entities",
+        "tf#/camera",
+        "Image:buffer",
+        "DepthImage:meter",
+        "Pinhole:image_from_camera",
+    ):
+        assert marker in playback.stdout, marker
+    recording = output.with_suffix(".mcap")
+    assert recording.read_bytes().startswith(b"\x89MCAP")
     repeated = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert repeated.returncode != 0
     assert "FileExistsError" in repeated.stderr

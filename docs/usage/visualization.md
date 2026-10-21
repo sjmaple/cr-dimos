@@ -150,34 +150,42 @@ To use a custom websocket port, set `--rerunwebsocketserver.port`; the bridge in
 
 ## Generated CDR viewer demo (WIP)
 
-The CDR viewer is under development. Existing legacy messages remain supported.
-Generated messages use viewer adapters for geometry, images, depth, camera
-calibration and point clouds. Business producers have not all migrated.
+The CDR viewer is under development. This example runs the real Rerun bridge
+with local Zenoh transports. It needs no robot or ROS installation.
 
-From the repository root, install this checkout and the viewer:
+From the repository root:
 
 ```sh skip
-DIMOS_ALLOW_MISSING_COCKPIT=1 uv sync --locked --extra visualization
-uv run --extra visualization python -I examples/message-viewer/demo_cdr_rerun.py cdr-viewer.rrd
+DIMOS_ALLOW_MISSING_COCKPIT=1 uv sync --locked --extra visualization --extra web
+uv run --extra visualization --extra web python -I examples/message-viewer/demo_cdr_rerun.py cdr-viewer.rrd
 uv run --extra visualization rerun cdr-viewer.rrd
+uv run --extra visualization rerun cdr-viewer-replay.rrd
 ```
 
-The first command builds this checkout, including its generated messages. The
-headless build flag omits browser assets. It does not disable message generation.
-Use a new output filename for each run. The demo refuses to overwrite a file.
+Use a new output filename for each run. The example also creates
+`cdr-viewer.mcap`. All three destinations must be new. The build flag permits
+installation without prebuilt browser assets; message generation still runs.
 
-The demo sends four generated messages through a local Zenoh/CDR connection and
-logs the received values with the Rerun adapters. It prints a receipt summary.
-It needs no robot or ROS installation. In Rerun, check:
+The live recording uses `RerunBridgeModule.start()`, its typed subscriptions and
+rendering callbacks. A receipt signal waits for each message before shutdown.
+The MCAP contains the source scene encoded as CDR with complete ROS2 schemas.
+`CdrMcapStore` and `render_store` read that file to create the replay recording.
+The MCAP is example input for playback, not a capture by the native recorder.
 
-- Pose axes at `[1.5, -2.5, 0.25]`.
-- Four colored points and a 2-by-2 red, green, blue and white image.
-- Camera calibration on the image.
-- Exact pose fields, including `nanosec: 123456789`, in the text panel.
+| PR capability | Demo scene | What to check |
+| --- | --- | --- |
+| TF and source metadata | `tf`, `pose` | Map/camera frames, pose axes at `[1.5, -2.5, 0.25]`, `nanosec: 123456789` in the text tab |
+| Geometry adapters | `point`, `odometry`, `path`, `entities` | Point, three-waypoint path, odometry axes, labeled person and object |
+| Camera calibration | `image`, `late_image` | Pinhole on each image, whether calibration arrives first or last |
+| Sensor buffers | `image`, `depth`, `compressed`, `compressed_depth` | Four RGB pixels, big-endian uint16 depth, PNG image and JXL depth in the sensor tab |
+| Cloud rendering | `cloud`, `cloud_boxes`, `cloud_height` | RGB points, boxes and height-colored spheres |
+| Legacy rendering | `legacy_pose` | Existing pose rendering alongside generated messages |
+| MCAP playback | `cdr-viewer-replay.rrd` | The same generated scene loaded from its embedded schemas; cloud display uses the replay defaults |
 
-The demo explicitly places its `map` frame at the viewer origin. Runtime
-producers must provide the TF frames needed by their scene. This demo tests the
-transport-to-renderer path; it does not start the module coordinator or exercise
-bridge discovery. The existing end-to-end test runs this example and checks the
-recording with the Rerun CLI. The browser decoder fixture is described in
-[Web bridge](/docs/web/bridge.md#generated-cdr-messages-wip).
+The example anchors its `world` TF frame to the viewer root. Business producers
+must supply their own TF tree. It does not demonstrate robot graph migration or
+automatic CDR type discovery. The existing integration test runs this example,
+reads both RRDs with the Rerun CLI, and checks the listed data and components.
+
+For the live browser SDK and manifest path, run the
+[Web bridge demo](/docs/web/bridge.md#generated-cdr-messages-wip).
