@@ -476,8 +476,8 @@ class ControlCoordinator(Module):
         """Send one robot its command for this tick. Called by the tick loop,
         which holds ``_hardware_lock``."""
         ports = self._command_ports[source]
-        for port, msg in self._connections[source].command_messages(values, time.time()):
-            ports[port].publish(msg)
+        for out in self._connections[source].command_messages(values, time.time()):
+            ports[out.port].publish(out.message)
 
     @rpc
     def add_hardware(

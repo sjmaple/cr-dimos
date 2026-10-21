@@ -238,7 +238,7 @@ def test_each_kind_of_command_goes_to_its_own_port() -> None:
     source.on_message("angles", JointState(name=[GRIPPER], position=[0.05]))
 
     values = source.command({J1: 0.2}, ControlMode.VELOCITY)
-    messages = dict(source.command_messages(values, ts=1.0))
+    messages = {out.port: out.message for out in source.command_messages(values, ts=1.0)}
 
     assert list(messages) == ["target_angles", "spin_rates"]
     assert list(messages["target_angles"].name) == [GRIPPER]
@@ -253,7 +253,8 @@ def test_a_base_is_told_zero_on_every_axis_on_its_port() -> None:
     source.on_message("speed", Twist())
 
     values = source.command({}, None)
-    (port, twist), *rest = source.command_messages(values, ts=1.0)
+    first, *rest = source.command_messages(values, ts=1.0)
+    port, twist = first.port, first.message
 
     assert source.ready_for_control()
     assert values == {"go2/base/vx": 0.0, "go2/base/vy": 0.0, "go2/base/wz": 0.0}

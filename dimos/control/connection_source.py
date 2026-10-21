@@ -70,6 +70,34 @@ _INTERFACE_BY_MODE: dict[ControlMode, str] = {
 
 
 @dataclass(frozen=True, slots=True)
+class PortMessage:
+    """One command message and the driver port it goes to.
+
+    Attributes:
+        port: The driver's input port name, e.g. "cmd_vel".
+        message: The message to send on it, e.g. a ``Twist``.
+    """
+
+    port: str
+    message: Any
+
+
+@dataclass(frozen=True, slots=True)
+class _SensorReading:
+    """One number a sensor reports.
+
+    Attributes:
+        sensor: The sensor's full name, e.g. "g1/imu".
+        reading: What it measures, e.g. "qw".
+        key: Its full key, e.g. "g1/imu/qw".
+    """
+
+    sensor: str
+    reading: str
+    key: str
+
+
+@dataclass(frozen=True, slots=True)
 class _Joint:
     """One joint's name and the keys it reports and accepts."""
 
@@ -166,7 +194,7 @@ class ConnectionSource:
                 self._joint_ports[spec.interface] = port
 
         self._joints: list[_Joint] = []
-        self._sensors: list[tuple[str, str, str]] = []
+        self._sensors: list[_SensorReading] = []
         self._base: str | None = None
         imu: str | None = None
         for resource in description.resources:
@@ -189,7 +217,8 @@ class ConnectionSource:
             else:
                 imu = part
                 self._sensors += [
-                    (part, i, f"{part}{SEPARATOR}{i}") for i in sorted(resource.state_interfaces)
+                    _SensorReading(part, i, f"{part}{SEPARATOR}{i}")
+                    for i in sorted(resource.state_interfaces)
                 ]
 
         self._readers: dict[str, Callable[[Any], Values]] = {}
@@ -312,9 +341,9 @@ class ConnectionSource:
         """Each sensor's latest readings, e.g. ``{"g1/imu": {"qw": 1.0, ...}}``."""
         latest = self._latest
         readings: dict[str, dict[str, float]] = {}
-        for sensor, reading, key in self._sensors:
-            if key in latest:
-                readings.setdefault(sensor, {})[reading] = latest[key]
+        for each in self._sensors:
+            if each.key in latest:
+                readings.setdefault(each.sensor, {})[each.reading] = latest[each.key]
         return readings
 
     def command(self, winners: Mapping[str, float], mode: ControlMode | None) -> Values:
@@ -363,7 +392,7 @@ class ConnectionSource:
             values.update((f"{self._base}{SEPARATOR}{i}", 0.0) for i in TWIST_INTERFACES)
         return values
 
-    def command_messages(self, values: Mapping[str, float], ts: float) -> list[tuple[str, Any]]:
+    def command_messages(self, values: Mapping[str, float], ts: float) -> list[PortMessage]:
         """The messages that carry ``values``, each with the driver's port to send it on.
 
         One per port: a ``JointState`` on each joint port, of the joints told
@@ -373,13 +402,13 @@ class ConnectionSource:
             values: A command from ``command``.
             ts: When it was made, in Unix seconds.
         """
-        messages: list[tuple[str, Any]] = []
+        messages: list[PortMessage] = []
         for interface, port in self._joint_ports.items():
             joints = [j.name for j in self._joints if f"{j.name}{SEPARATOR}{interface}" in values]
             if joints:
-                messages.append((port, joint_state_from_values(values, joints, ts)))
+                messages.append(PortMessage(port, joint_state_from_values(values, joints, ts)))
         if self._base is not None and self._base_port is not None:
-            messages.append((self._base_port, twist_from_values(values, self._base)))
+            messages.append(PortMessage(self._base_port, twist_from_values(values, self._base)))
         return messages
 
     def _hold(self, joint: _Joint, latest: Values) -> float | None:
