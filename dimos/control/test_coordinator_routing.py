@@ -48,7 +48,7 @@ from dimos.control.tasks.trajectory_task.trajectory_task import (
     JointTrajectoryTaskConfig,
 )
 from dimos.control.teleop_coordinator import TeleopControlCoordinator
-import dimos.core.cdr_transport as cdr_module
+from dimos.core import transport as transport_module
 from dimos.core.global_config import GlobalConfig
 from dimos.core.stream import In
 from dimos.core.transport_factory import make_transport
@@ -60,8 +60,8 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
-from dimos.protocol.service.lcmservice import LCMConfig
 from dimos.teleop.webxr.controller_types import Buttons
 
 ARM_JOINTS = ["arm/joint1", "arm/joint2"]
@@ -1066,7 +1066,7 @@ class MemqRPC(LCMRPC):
 
 
 def test_cdr_joint_wire_reaches_existing_trajectory_task_and_publishes_cdr_state(monkeypatch):
-    monkeypatch.setattr(cdr_module, "LCMConfig", partial(LCMConfig, url="memq://"))
+    monkeypatch.setattr(transport_module, "LCM", partial(LCM, url="memq://"))
     config = GlobalConfig(transport="lcm")
     incoming = CdrJointState(
         Header(Time(0, 1), "arm"),
