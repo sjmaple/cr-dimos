@@ -66,7 +66,6 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
-from dimos.msgs.time import to_seconds
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic, Zenoh
 from dimos.protocol.pubsub.patterns import Glob, pattern_matches
@@ -491,7 +490,7 @@ class RerunBridgeModule(Module):
                     ),
                     frame_id=t.header.frame_id,
                     child_frame_id=t.child_frame_id,
-                    ts=to_seconds(t.header.stamp),
+                    ts=t.header.stamp.sec + t.header.stamp.nanosec / 1_000_000_000,
                 )
                 for t in msg.transforms
             ]

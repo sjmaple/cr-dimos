@@ -40,13 +40,13 @@ from dimos.messages.sensor_msgs.msg import (
     CompressedImage,
     Image as CdrImage,
 )
+from dimos.messages.std_msgs.msg import Header as CdrHeader
 from dimos.messages.tf2_msgs.msg import TFMessage as CdrTFMessage
 from dimos.msgs.nav_msgs.Path import Path as NavPath
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.shape_msgs.TriangleMesh import TriangleMesh
 from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
-from dimos.msgs.time import message_header, to_nanoseconds
 from dimos.visualization.rerun.cdr import camera_pinhole, generated_archetypes, message_frame_id
 from dimos.visualization.rerun.init import rerun_init
 
@@ -245,10 +245,13 @@ def render_store(
                     report(obs)
                     continue
                 rr.set_time("time", duration=obs.ts - t0)
-                header = message_header(obs.data)
-                if header is not None:
+                header = getattr(obs.data, "header", None)
+                if isinstance(header, CdrHeader):
                     rr.set_time(
-                        "source", timestamp=np.datetime64(to_nanoseconds(header.stamp), "ns")
+                        "source",
+                        timestamp=np.datetime64(
+                            header.stamp.sec * 1_000_000_000 + header.stamp.nanosec, "ns"
+                        ),
                     )
                 else:
                     rr.disable_timeline("source")

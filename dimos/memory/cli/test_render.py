@@ -15,6 +15,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import imagecodecs
 import numpy as np
 import rerun as rr
 
@@ -27,14 +28,16 @@ from dimos.messages.geometry_msgs.msg import (
     TransformStamped,
     Vector3 as CdrVector3,
 )
-from dimos.messages.sensor_msgs.msg import CameraInfo as CdrCameraInfo, CompressedImage
+from dimos.messages.sensor_msgs.msg import (
+    CameraInfo as CdrCameraInfo,
+    CompressedImage,
+    RegionOfInterest,
+)
 from dimos.messages.std_msgs.msg import Header
 from dimos.messages.tf2_msgs.msg import TFMessage as CdrTFMessage
-from dimos.msgs.camera_info import camera_info_from_intrinsics
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.image import compressed_image_from_image, image_from_array
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
@@ -251,15 +254,24 @@ def test_render_store_themes_meshes(tmp_path, monkeypatch) -> None:  # type: ign
 def test_generated_compressed_image_pinhole_waits_for_its_frame(tmp_path, capsys, mocker):
     log = mocker.spy(rr, "log")
     set_time = mocker.spy(rr, "set_time")
-    info = camera_info_from_intrinsics(
-        fx=5.0, fy=5.0, cx=2.0, cy=2.0, width=4, height=4, header=Header(Time(0, 0), "camera")
+    info = CdrCameraInfo(
+        distortion_model="plumb_bob",
+        d=np.zeros(5, dtype=np.float64),
+        r=np.eye(3, dtype=np.float64).ravel(),
+        p=np.zeros(12, dtype=np.float64),
+        binning_x=0,
+        binning_y=0,
+        roi=RegionOfInterest(x_offset=0, y_offset=0, height=0, width=0, do_rectify=False),
+        header=Header(Time(0, 0), "camera"),
+        width=4,
+        height=4,
+        k=np.array([5, 0, 2, 0, 5, 2, 0, 0, 1], dtype=np.float64),
     )
-    image = compressed_image_from_image(
-        image_from_array(
-            np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
-            encoding="rgb8",
-            header=Header(Time(0, 0), "camera"),
-        )
+    pixels = np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8)
+    image = CompressedImage(
+        header=info.header,
+        format="png",
+        data=np.frombuffer(imagecodecs.png_encode(pixels), dtype=np.uint8),
     )
     image.header.stamp = Time(1_789_654_321, 1)
     tf = CdrTFMessage(

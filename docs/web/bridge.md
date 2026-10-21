@@ -40,7 +40,7 @@ The relay flags are `dimos run` options. Most of the rest are fields of the brid
 
 ## Channels
 
-### Generated CDR messages
+### Generated CDR messages (WIP)
 
 An installed generated type can be sent as CDR with its complete ROS2 definition
 in the manifest. Declare the encoding explicitly in this proposal:
@@ -56,8 +56,7 @@ viewer = cockpit(channels=[Channel(
 ```
 
 Compose `viewer` with the module producing `measured_pose: Out[PoseStamped]`.
-Bind both ports to the same explicit `CdrTransport` when using the opt-in native
-CDR transport. The manifest embeds PoseStamped, Header and Time definitions from
+Generated ports use the shared CDR codec on the selected LCM or Zenoh transport. The manifest embeds PoseStamped, Header and Time definitions from
 the installed message owner; the browser needs neither ROS nor another generated
 message package. Registered custom web encoders continue to take precedence.
 Existing LCM/JSON channels and default transport selection are unchanged here.

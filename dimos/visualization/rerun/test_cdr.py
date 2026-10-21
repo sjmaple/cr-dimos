@@ -38,12 +38,15 @@ from dimos.messages.geometry_msgs.msg import (
     Vector3,
 )
 from dimos.messages.nav_msgs.msg import Odometry
-from dimos.messages.sensor_msgs.msg import Image
+from dimos.messages.sensor_msgs.msg import (
+    CameraInfo,
+    Image,
+    PointCloud2,
+    PointField,
+    RegionOfInterest,
+)
 from dimos.messages.std_msgs.msg import Header
 from dimos.messages.tf2_msgs.msg import TFMessage
-from dimos.msgs.camera_info import camera_info_from_intrinsics
-from dimos.msgs.image import image_from_array
-from dimos.msgs.pointcloud import pointcloud_from_xyz_rgb
 from dimos.protocol.rpc.zenohrpc import ZenohRPC
 from dimos.visualization.rerun.bridge import Config, RerunBridgeModule, _resolve_pubsubs
 from dimos.visualization.rerun.cdr import (
@@ -54,6 +57,56 @@ from dimos.visualization.rerun.cdr import (
 )
 from dimos.visualization.vis_module import vis_module
 from dimos.web.relay_bridge.gen_cdr_fixtures import build_messages
+
+
+def image_from_array(pixels, *, encoding, header=None):
+    return Image(
+        header=header or Header(stamp=Time(sec=0, nanosec=0), frame_id=""),
+        width=pixels.shape[1],
+        height=pixels.shape[0],
+        encoding=encoding,
+        is_bigendian=int(pixels.dtype.byteorder == ">"),
+        step=pixels.strides[0],
+        data=np.frombuffer(pixels.tobytes(), dtype=np.uint8),
+    )
+
+
+def camera_info_from_intrinsics(fx, fy, cx, cy, width, height, *, header):
+    return CameraInfo(
+        distortion_model="plumb_bob",
+        d=np.zeros(5, dtype=np.float64),
+        r=np.eye(3, dtype=np.float64).ravel(),
+        p=np.zeros(12, dtype=np.float64),
+        binning_x=0,
+        binning_y=0,
+        roi=RegionOfInterest(x_offset=0, y_offset=0, height=0, width=0, do_rectify=False),
+        header=header,
+        width=width,
+        height=height,
+        k=np.asarray([fx, 0, cx, 0, fy, cy, 0, 0, 1], dtype=np.float64),
+    )
+
+
+def pointcloud_from_xyz_rgb(points, colors, *, header):
+    data = np.empty(len(points), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("rgb", "<u4")])
+    for i, name in enumerate(("x", "y", "z")):
+        data[name] = points[:, i]
+    rgb = colors.astype(np.uint32)
+    data["rgb"] = (rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]
+    return PointCloud2(
+        header=header,
+        height=1,
+        width=len(points),
+        point_step=16,
+        row_step=len(points) * 16,
+        is_bigendian=False,
+        is_dense=False,
+        fields=[
+            PointField(name=name, offset=i * 4, datatype=7 if i < 3 else 6, count=1)
+            for i, name in enumerate(("x", "y", "z", "rgb"))
+        ],
+        data=np.frombuffer(data.tobytes(), dtype=np.uint8),
+    )
 
 
 @pytest.fixture

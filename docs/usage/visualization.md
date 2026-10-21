@@ -148,98 +148,36 @@ Rerun on `dev` is **module-driven**: modules decide what to log, and `Blueprint.
 
 To use a custom websocket port, set `--rerunwebsocketserver.port`; the bridge in the same blueprint takes the viewer URL from that server. `--rerunbridgemodule.websocket-url` points a bridge at a websocket server elsewhere. Set `host` on each module to override its bind address; both default to the shared `listen_host`.
 
-## Generated CDR geometry
+## Generated CDR viewer demo (WIP)
 
-Generated message classes are plain values. The Rerun bridge supplies the
-PoseStamped/PointStamped adapters, including pose axes and a text view of every
-field, plus raw/compressed image, depth, CameraInfo and colored point-cloud
-adapters. An explicit CDR subscription is independent of legacy pubsub discovery:
+The CDR viewer is under development. Existing legacy messages remain supported.
+Generated messages use viewer adapters for geometry, images, depth, camera
+calibration and point clouds. Business producers have not all migrated.
 
-```python
-from dimos.core.cdr_transport import CdrTransport
-from dimos.messages.geometry_msgs.msg import PoseStamped
-from dimos.visualization.rerun.bridge import RerunBridgeModule
+From the repository root, install this checkout and the viewer:
 
-viewer = RerunBridgeModule(pubsubs=[], cdr_transports={
-    "measured_pose": CdrTransport("measured_pose", PoseStamped, backend="zenoh"),
-})
-viewer.start()
-# Stop the bridge when the application shuts down:
-viewer.stop()
+```sh skip
+DIMOS_ALLOW_MISSING_COCKPIT=1 uv sync --locked --extra visualization
+uv run --extra visualization python -I examples/message-viewer/demo_cdr_rerun.py cdr-viewer.rrd
+uv run --extra visualization rerun cdr-viewer.rrd
 ```
 
-The producer must use the matching explicit CDR channel and schema. Each
-transport instance in `cdr_transports` belongs to the bridge; use a separate
-instance for the producer. Header stamps use a source timeline with exact
-nanoseconds, including zero. Header frames remain named `tf#/<frame_id>` frames;
-they are not silently reinterpreted as world coordinates. The existing TF tree
-must locate that frame for a shared spatial view. CameraInfo attaches to images
-in the same Header frame in either arrival order. Mapping/control and remaining
-generated domains still need their own adapters; transport defaults are unchanged.
+The first command builds this checkout, including its generated messages. The
+headless build flag omits browser assets. It does not disable message generation.
+Use a new output filename for each run. The demo refuses to overwrite a file.
 
-To see an actual offline exchange, from this checkout with its normal installed
-DimOS environment:
+The demo sends four generated messages through a local Zenoh/CDR connection and
+logs the received values with the Rerun adapters. It prints a receipt summary.
+It needs no robot or ROS installation. In Rerun, check:
 
-```sh
-python examples/message-viewer/demo_cdr_rerun.py pose.rrd
-rerun pose.rrd
-```
+- Pose axes at `[1.5, -2.5, 0.25]`.
+- Four colored points and a 2-by-2 red, green, blue and white image.
+- Camera calibration on the image.
+- Exact pose fields, including `nanosec: 123456789`, in the text panel.
 
-The example sends generated pose, RGB image, CameraInfo and RGBD-projected cloud bytes over
-discovery-disabled loopback Zenoh/CDR, then writes a real Rerun recording. Its
-layout shows pose axes, colored points, exact message values and RGB pixels.
-For this demonstration only, it explicitly
-places the message's map frame at the viewer origin. It refuses an existing
-output, needs no robot, and does not start the module coordinator or change host
-configuration. CI runs this exact example and reads the RRD back with the
-pinned Rerun CLI to check geometry, axes, image/point buffers and nanosecond timestamps.
-
-## Arrays and compression for generated sensors
-
-Image values hold ROS fields; array operations are separate helpers:
-
-```python
-import numpy as np
-from dimos.msgs.image import image_from_array, image_view
-from dimos.msgs.time import header_now
-
-rgb = np.array([[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 255]]], dtype=np.uint8)
-image = image_from_array(rgb, encoding="rgb8", header=header_now("camera_optical"))
-pixels = image_view(image)
-```
-
-`image_from_array` copies its input. `image_view` borrows a read-only view that
-keeps storage alive and respects row padding and byte order. Use `pixels.copy()`
-when you need independent writable data. These helpers require generated
-`dimos.messages` values; legacy convenience classes retain their old path.
-
-Project a matching color/depth pair using explicit camera calibration and units:
-
-```python
-from dimos.msgs.camera_info import camera_info_from_intrinsics
-from dimos.msgs.pointcloud import pointcloud_from_rgbd, pointcloud_xyz
-
-depth = image_from_array(np.full((2, 2), 1000, dtype=np.uint16), encoding="16UC1", header=image.header)
-camera = camera_info_from_intrinsics(2, 2, 0.5, 0.5, 2, 2, header=image.header)
-cloud = pointcloud_from_rgbd(image, depth, camera, depth_scale=0.001)
-xyz = pointcloud_xyz(cloud)
-```
-
-Integer depth is scaled to meters; `32FC1` depth is already meters. Invalid,
-nonpositive or truncated depths are excluded. The cloud keeps the depth Header
-and RGB colors. Structured cloud views retain field counts, endian and row
-padding; selection and transforms preserve extra fields rather than rebuilding
-only XYZ. Calibration dimensions and focal lengths are validated.
-
-Compression is explicit and keeps source metadata:
-
-```python
-from dimos.msgs.image import compressed_image_from_image, image_from_compressed
-
-encoded = compressed_image_from_image(image, format="png")
-restored = image_from_compressed(encoded)
-```
-
-JPEG is lossy color/gray; PNG preserves uint16 depth. JXL is an explicit consumer
-extension and preserves uint16/float32 depth losslessly. The Rerun adapter keeps
-depth units and normalizes byte order without changing source CDR values.
+The demo explicitly places its `map` frame at the viewer origin. Runtime
+producers must provide the TF frames needed by their scene. This demo tests the
+transport-to-renderer path; it does not start the module coordinator or exercise
+bridge discovery. The existing end-to-end test runs this example and checks the
+recording with the Rerun CLI. The browser decoder fixture is described in
+[Web bridge](/docs/web/bridge.md#generated-cdr-messages-wip).

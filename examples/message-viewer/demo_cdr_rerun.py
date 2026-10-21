@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Record generated pose, image and RGBD cloud over loopback CDR into Rerun."""
+"""Record generated pose, image and colored cloud over loopback CDR into Rerun."""
 
 from __future__ import annotations
 
@@ -30,11 +30,14 @@ import rerun.blueprint as rrb
 from dimos.core.transport import ZenohTransport
 from dimos.messages.builtin_interfaces.msg import Time
 from dimos.messages.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
-from dimos.messages.sensor_msgs.msg import CameraInfo
+from dimos.messages.sensor_msgs.msg import (
+    CameraInfo,
+    Image,
+    PointCloud2,
+    PointField,
+    RegionOfInterest,
+)
 from dimos.messages.std_msgs.msg import Header
-from dimos.msgs.camera_info import camera_info_from_intrinsics
-from dimos.msgs.image import image_from_array
-from dimos.msgs.pointcloud import pointcloud_from_rgbd
 from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic
 from dimos.visualization.rerun.cdr import camera_pinhole, generated_archetypes
 
@@ -49,16 +52,52 @@ def run(output: Path) -> None:
             position=Point(x=1.5, y=-2.5, z=0.25), orientation=Quaternion(x=0, y=0, z=0.6, w=0.8)
         ),
     )
-    image = image_from_array(
-        np.array([[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 255]]], dtype=np.uint8),
-        encoding="rgb8",
+    pixels = np.array([[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 255]]], dtype=np.uint8)
+    image = Image(
         header=message.header,
+        width=2,
+        height=2,
+        encoding="rgb8",
+        is_bigendian=0,
+        step=6,
+        data=pixels.ravel(),
     )
-    depth = image_from_array(
-        np.full((2, 2), 1000, dtype=np.uint16), encoding="16UC1", header=message.header
+    calibration = CameraInfo(
+        distortion_model="plumb_bob",
+        d=np.zeros(5, dtype=np.float64),
+        r=np.eye(3, dtype=np.float64).ravel(),
+        p=np.zeros(12, dtype=np.float64),
+        binning_x=0,
+        binning_y=0,
+        roi=RegionOfInterest(x_offset=0, y_offset=0, height=0, width=0, do_rectify=False),
+        header=message.header,
+        width=2,
+        height=2,
+        k=np.array([2, 0, 0.5, 0, 2, 0.5, 0, 0, 1], dtype=np.float64),
     )
-    calibration = camera_info_from_intrinsics(2, 2, 0.5, 0.5, 2, 2, header=message.header)
-    cloud = pointcloud_from_rgbd(image, depth, calibration, depth_scale=0.001)
+    points = np.array(
+        [
+            (-0.25, -0.25, 1, 0xFF0000),
+            (0.25, -0.25, 1, 0x00FF00),
+            (-0.25, 0.25, 1, 0x0000FF),
+            (0.25, 0.25, 1, 0xFFFFFF),
+        ],
+        dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("rgb", "<u4")],
+    )
+    cloud = PointCloud2(
+        header=message.header,
+        height=1,
+        width=4,
+        point_step=16,
+        row_step=64,
+        is_bigendian=False,
+        is_dense=True,
+        fields=[
+            PointField(name=name, offset=i * 4, datatype=7 if i < 3 else 6, count=1)
+            for i, name in enumerate(points.dtype.names or ())
+        ],
+        data=np.frombuffer(points.tobytes(), dtype=np.uint8),
+    )
     messages: dict[str, Any] = {
         "pose": message,
         "image": image,
@@ -102,7 +141,7 @@ def run(output: Path) -> None:
             output,
             default_blueprint=rrb.Blueprint(
                 rrb.Horizontal(
-                    rrb.Spatial3DView(origin="world", name="Pose axes and RGBD cloud"),
+                    rrb.Spatial3DView(origin="world", name="Pose axes and colored cloud"),
                     rrb.Vertical(
                         rrb.TextDocumentView(
                             origin="world/pose/message", name="Exact message values"
@@ -130,6 +169,9 @@ def run(output: Path) -> None:
         if errors:
             raise errors[0]
         recording.flush(timeout_sec=10)
+    print("Received PoseStamped, Image, PointCloud2 and CameraInfo through Zenoh/CDR.")
+    print("Source timestamp: 1700000000.123456789; frame: map")
+    print("Expect pose [1.5, -2.5, 0.25], red/green/blue/white pixels and four colored points.")
 
 
 def main() -> None:
