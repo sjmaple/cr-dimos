@@ -20,6 +20,7 @@ in-process transport, so nothing touches the network.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterator
 import math
 import pickle
@@ -480,19 +481,48 @@ def test_commands_for_other_robots_do_not_feed_the_deadman(rig: Callable[..., Ri
     assert r.module.halts == 1
 
 
-def test_any_accepted_command_feeds_the_one_deadman(rig: Callable[..., Rig]) -> None:
-    """Base commands keep the module alive after the body's stop."""
+def test_any_accepted_command_feeds_the_one_deadman(
+    rig: Callable[..., Rig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Base commands reset the body's deadline on the same controlled clock."""
     r = rig(BodyAndBase)
-    body = MotorCommandArray(q=[0.1, 0.2], dq=[0, 0], kp=[1, 1], kd=[1, 1], tau=[0, 0])
-    forward = Twist(Vector3(0.1, 0.0, 0.0), Vector3(0.0, 0.0, 0.0))
-    r.send("motor_command", body)
-    deadline = time.monotonic() + 4 * DEADMAN_S
-    while time.monotonic() < deadline:
-        r.send("base_command", forward)
-        time.sleep(DEADMAN_S / 5)
-    assert r.module.halts == 0
-    assert wait_until(lambda: r.module.status().deadman_fired)
-    assert r.module.halts == 1
+
+    async def check_deadman() -> None:
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        written = asyncio.Event()
+        halted = asyncio.Event()
+        with monkeypatch.context() as patch:
+            patch.setattr(loop, "time", lambda: now)
+            write = r.module.write
+            halt = r.module.halt
+
+            def record_write(values: Any) -> None:
+                write(values)
+                written.set()
+
+            def record_halt() -> None:
+                halt()
+                halted.set()
+
+            patch.setattr(r.module, "write", record_write)
+            patch.setattr(r.module, "halt", record_halt)
+            body = MotorCommandArray(q=[0.1, 0.2], dq=[0, 0], kp=[1, 1], kd=[1, 1], tau=[0, 0])
+            forward = Twist(Vector3(0.1, 0.0, 0.0), Vector3(0.0, 0.0, 0.0))
+            r.send("motor_command", body)
+            await written.wait()
+            for _ in range(8):
+                now += DEADMAN_S / 2
+                written.clear()
+                r.send("base_command", forward)
+                await written.wait()
+            assert r.module.halts == 0
+            now += 2 * DEADMAN_S
+            await halted.wait()
+            assert r.module.status().deadman_fired
+            assert r.module.halts == 1
+
+    r.module.spawn(check_deadman()).result(timeout=10)
 
 
 def test_a_failing_write_halts_shows_the_error_and_carries_on(
