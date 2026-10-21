@@ -22,8 +22,8 @@ import numpy as np
 import pytest
 import rerun as rr
 
-from dimos.core.cdr_transport import CdrTransport
 from dimos.core.global_config import GlobalConfig
+from dimos.core.transport import ZenohTransport
 from dimos.messages.builtin_interfaces.msg import Time
 from dimos.messages.dimos_msgs.msg import EntityMarker, EntityMarkers
 from dimos.messages.geometry_msgs.msg import (
@@ -114,13 +114,13 @@ def test_source_time_is_scoped_and_reset_after_render_failure(bridge, mocker, na
 
 def test_subscription_cleanup_order_and_failed_start(bridge) -> None:
     operations: list[str] = []
-    transport = Mock(spec=CdrTransport)
+    transport = Mock(spec=ZenohTransport)
     transport.subscribe.return_value = lambda: operations.append("unsubscribe")
     transport.stop.side_effect = lambda: operations.append("stop")
     bridge._subscribe_cdr("pose", transport)
     bridge.stop()
     assert operations == ["unsubscribe", "stop"]
-    failed = Mock(spec=CdrTransport)
+    failed = Mock(spec=ZenohTransport)
     failed.subscribe.side_effect = RuntimeError("native start failed")
     with pytest.raises(RuntimeError, match="native start failed"):
         bridge._subscribe_cdr("pose", failed)

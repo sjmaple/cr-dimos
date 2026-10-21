@@ -49,11 +49,11 @@ from reactivex.disposable import Disposable
 from toolz import pipe  # type: ignore[import-untyped]
 
 from dimos.constants import RECORDINGS_DIR
-from dimos.core.cdr_transport import CdrTransport
 from dimos.core.coordination.process_lifecycle import DIMOS_RUN_ID_ENV
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
+from dimos.core.transport import PubSubTransport
 from dimos.messages.sensor_msgs.msg import (
     CameraInfo as CdrCameraInfo,
     CompressedImage as CdrCompressedImage,
@@ -296,7 +296,7 @@ class Config(ModuleConfig):
     pubsubs: list[SubscribeAllCapable[Any, Any]] | None = None
     # Explicit subscriptions for the proposal's generated CDR channels. Each
     # transport belongs to this bridge; legacy discovery/defaults stay intact.
-    cdr_transports: dict[str, CdrTransport[Any]] = field(default_factory=dict)
+    cdr_transports: dict[str, PubSubTransport[Any]] = field(default_factory=dict)
 
     visual_override: dict[Glob | str, VisualOverride] = field(default_factory=dict)
     static: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
@@ -662,7 +662,7 @@ class RerunBridgeModule(Module):
         for topic, transport in self.config.cdr_transports.items():
             self._subscribe_cdr(topic, transport)
 
-    def _subscribe_cdr(self, topic: str, transport: CdrTransport[Any]) -> None:
+    def _subscribe_cdr(self, topic: str, transport: PubSubTransport[Any]) -> None:
         cleanup = ExitStack()
         cleanup.callback(transport.stop)
         try:

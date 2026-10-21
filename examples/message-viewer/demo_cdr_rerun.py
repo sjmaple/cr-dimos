@@ -27,7 +27,7 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
-from dimos.core.cdr_transport import CdrTransport
+from dimos.core.transport import ZenohTransport
 from dimos.messages.builtin_interfaces.msg import Time
 from dimos.messages.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from dimos.messages.sensor_msgs.msg import CameraInfo
@@ -35,6 +35,7 @@ from dimos.messages.std_msgs.msg import Header
 from dimos.msgs.camera_info import camera_info_from_intrinsics
 from dimos.msgs.image import image_from_array
 from dimos.msgs.pointcloud import pointcloud_from_rgbd
+from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic
 from dimos.visualization.rerun.cdr import camera_pinhole, generated_archetypes
 
 
@@ -114,12 +115,12 @@ def run(output: Path) -> None:
         # This demo explicitly identifies map with its viewer origin. Runtime
         # bridges use the producer's named TF frame; no coordinates are rewritten.
         recording.log("world", rr.Transform3D(child_frame="tf#/map"), static=True)
-        publishers: dict[str, CdrTransport[Any]] = {}
+        publishers: dict[str, ZenohTransport[Any]] = {}
         for topic, value in messages.items():
-            subscriber = CdrTransport(topic, type(value), backend="zenoh", **config)
+            subscriber = ZenohTransport(ZenohTopic(topic, type(value)), **config)
             cleanup.callback(subscriber.stop)
             cleanup.callback(subscriber.subscribe(partial(receive, topic=topic)))
-            publisher = CdrTransport(topic, type(value), backend="zenoh", **config)
+            publisher = ZenohTransport(ZenohTopic(topic, type(value)), **config)
             cleanup.callback(publisher.stop)
             publishers[topic] = publisher
         for topic, value in messages.items():
